@@ -1,0 +1,8 @@
+[22:48:11.350 INF] xfuzz 0.1.0 starting: workdir=./run seed=0x1234 procs=1 safe=1 dry=0 surfaces=[iokit]
+[22:48:11.351 INF] registry: 587 descriptors (BSD 0..587, MACH 0..0, IOKIT 0..0)
+[22:48:11.351 INF] coverage backend: blind
+[22:48:11.351 INF] crash: panic baseline mtime = 0
+[22:48:11.351 INF] worker 0: entering fuzz loop (seed=0x1234, corpus=0)
+[22:48:12.195 INF] corpus: saved 144 programs to ./run/corpus
+[22:48:12.195 INF] stats: execs=200 (237/s) corpus=144 faults=416 hangs=0 crashes=0 PANICS=0
+[22:48:12.195 INF] worker 0: exiting after 200 execs

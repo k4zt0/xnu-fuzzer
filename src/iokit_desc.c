@@ -33,6 +33,9 @@ static const char *k_dangerous_clients[] = {
     "EndpointSecurityDriverClient", "AppleCredentialManagerUserClient",
     "AppleKeyStoreUserClient", "AppleImage4UserClient",
     "AppleMobileApNonceUserClient", "AppleEpochManagerUserClient",
+    /* Power management: a fuzzed method can sleep/shut down the machine.
+     * Excluded in safe mode so autonomous runs don't knock the box out. */
+    "RootDomainUserClient", "IOPMrootDomain",
 };
 
 static bool client_is_dangerous(const char *cls) {
@@ -74,15 +77,18 @@ void xf_iokit_discover(void) {
     io_registry_entry_t e;
     uint32_t probed = 0, opened = 0;
     while ((e = IOIteratorNext(it)) && g_iokit_ntargets < XF_IOKIT_MAX_TARGETS) {
-        char cls[128] = {0};
-        if (!copy_str_prop(e, CFSTR("IOUserClientClass"), cls, sizeof(cls))) {
-            IOObjectRelease(e);
-            continue;
-        }
-        probed++;
-
         char provider[128] = {0};
         IOObjectGetClass(e, provider);
+
+        /* IOUserClientClass names the client the kernel will instantiate, when
+         * the node advertises one; otherwise we fall back to the provider
+         * class. We probe EVERY service node (not just ones exposing the
+         * property) so openable Apple drivers that don't publish it are still
+         * found. */
+        char cls[128] = {0};
+        if (!copy_str_prop(e, CFSTR("IOUserClientClass"), cls, sizeof(cls)))
+            snprintf(cls, sizeof(cls), "%s", provider);
+        probed++;
 
         uint64_t eid = 0;
         IORegistryEntryGetRegistryEntryID(e, &eid);

@@ -1,11 +1,12 @@
 # xfuzz — XNU kernel fuzzer (arm64 macOS)
 CC      ?= clang
 CFLAGS  ?= -O2 -g -std=c11 -Wall -Wextra -Wno-deprecated-declarations \
-           -Wno-unused-parameter -Iinclude -arch arm64
+           -Wno-unused-parameter -Iinclude -arch arm64 -MMD -MP
 LDFLAGS ?= -framework IOKit -framework CoreFoundation
 
 SRC := $(wildcard src/*.c)
 OBJ := $(patsubst src/%.c,build/%.o,$(SRC))
+DEP := $(OBJ:.o=.d)
 BIN := xfuzz
 
 .PHONY: all clean run smoke dryrun
@@ -32,3 +33,5 @@ smoke: $(BIN)
 
 clean:
 	rm -rf build $(BIN) $(BIN).dSYM
+
+-include $(DEP)
