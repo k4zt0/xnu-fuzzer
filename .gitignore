@@ -1,0 +1,20 @@
+# Build artifacts
+build/
+*.o
+*.d
+xfuzz
+xfuzz-*
+a.out
+*.dSYM/
+
+# Runtime state (machine-local, can be large / sensitive)
+corpus/*
+!corpus/.gitkeep
+crashes/*
+!crashes/.gitkeep
+state/*
+!state/.gitkeep
+*.log
+
+# macOS
+.DS_Store
