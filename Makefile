@@ -23,6 +23,10 @@ $(BIN): $(OBJ)
 	$(CC) $(CFLAGS) $(OBJ) -o $@ $(LDFLAGS)
 	@echo "built $(BIN)"
 
+# Serialization / signature self-test (no kernel contact).
+test: $(BIN)
+	./$(BIN) --selftest --workdir ./run
+
 # Validate the engine without touching the kernel.
 dryrun: $(BIN)
 	./$(BIN) --dry-run --max-execs 20000 --workdir ./run --verbose

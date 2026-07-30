@@ -226,6 +226,36 @@ static void worker_loop(uint64_t seed, int worker_id) {
             (unsigned long long)st.execs);
 }
 
+/* ----- self-test: serialization round-trip is the backbone of corpus,
+ * repro, and panic attribution — if it silently breaks, everything downstream
+ * does too. Validate it over many generated programs. ---------------------- */
+static int self_test(void) {
+    xf_rng_t rng; xf_rng_seed(&rng, 0xA5A5A5A5);
+    int fail = 0;
+    static char a[1 << 20], b[1 << 20];
+    for (int i = 0; i < 5000; i++) {
+        xf_prog p; xf_generate(&p, &rng, 16);
+        xf_prog_serialize(&p, a, sizeof(a));
+        xf_prog q;
+        if (!xf_prog_deserialize(&q, a)) { XF_ERR("selftest: parse failed @%d", i); fail++; xf_prog_free(&p); continue; }
+        xf_prog_serialize(&q, b, sizeof(b));
+        if (strcmp(a, b) != 0) {
+            XF_ERR("selftest: round-trip mismatch @%d (ncalls %u vs %u)",
+                   i, p.ncalls, q.ncalls);
+            fail++;
+        }
+        /* signature must be stable across a copy */
+        xf_prog c; xf_prog_copy(&c, &p);
+        if (xf_prog_signature(&p, 0, 0) != xf_prog_signature(&c, 0, 0)) {
+            XF_ERR("selftest: signature unstable @%d", i); fail++;
+        }
+        xf_prog_free(&p); xf_prog_free(&q); xf_prog_free(&c);
+    }
+    if (fail == 0) XF_INFO("selftest: PASS (5000 programs round-tripped)");
+    else           XF_ERR("selftest: FAIL (%d errors)", fail);
+    return fail ? 1 : 0;
+}
+
 /* ----- setup ------------------------------------------------------------- */
 static char s_corpus[1024], s_crash[1024], s_state[1024], s_log[1024];
 static char s_sandbox[1024];
@@ -266,12 +296,14 @@ int main(int argc, char **argv) {
         {"repro",    required_argument, 0, 'R'},
         {"minimize", required_argument, 0, 'M'},
         {"iters",    required_argument, 0, 'I'},
+        {"selftest", no_argument,       0, 'T'},
         {"verbose",  no_argument,       0, 'v'},
         {"help",     no_argument,       0, 'h'},
         {0,0,0,0}
     };
+    int do_selftest = 0;
     int ch;
-    while ((ch = getopt_long(argc, argv, "w:s:p:t:S:c:udm:R:M:I:vh", opts, NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "w:s:p:t:S:c:udm:R:M:I:Tvh", opts, NULL)) != -1) {
         switch (ch) {
         case 'w': g_cfg.workdir = optarg; break;
         case 's': g_cfg.seed = strtoull(optarg, NULL, 0); break;
@@ -285,6 +317,7 @@ int main(int argc, char **argv) {
         case 'R': repro_path = optarg; break;
         case 'M': minimize_path = optarg; break;
         case 'I': repro_iters = atoi(optarg); break;
+        case 'T': do_selftest = 1; break;
         case 'v': g_cfg.verbose = true; break;
         case 'h': default: usage(argv[0]); return ch == 'h' ? 0 : 1;
         }
@@ -299,7 +332,10 @@ int main(int argc, char **argv) {
             g_cfg.enable_bsd ? "bsd " : "", g_cfg.enable_mach ? "mach " : "",
             g_cfg.enable_iokit ? "iokit" : "");
 
-    xf_desc_init(!g_cfg.dry_run && g_cfg.enable_iokit);
+    xf_desc_init(!g_cfg.dry_run && g_cfg.enable_iokit && !do_selftest);
+
+    if (do_selftest) { int rc = self_test(); xf_log_flush(); return rc; }
+
     xf_executor_init();
     s_cov = xf_cov_init(!strcmp(cov_name, "kdebug") ? XF_COV_KDEBUG : XF_COV_BLIND);
     (void)s_cov;
