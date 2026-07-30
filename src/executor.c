@@ -181,6 +181,12 @@ static void child_seal_fds(void) {
 /* Execute the whole program in the current (child) process. */
 static void child_run(const xf_prog *pc) {
     child_seal_fds();
+    /* Ignore job-control stop signals so a fuzzed tty op or self-signal can't
+     * park the child in the stopped state. SIGSTOP itself is uncatchable —
+     * kill-family and ptrace syscalls are gated as DANGEROUS instead. */
+    signal(SIGTSTP, SIG_IGN);
+    signal(SIGTTIN, SIG_IGN);
+    signal(SIGTTOU, SIG_IGN);
     child_install_handlers();
     /* Local mutable copy of the resource pool. */
     xf_prog p = *pc;   /* shallow: blobs shared, we only write res_vals */
@@ -257,6 +263,12 @@ void xf_execute(const xf_prog *p, int timeout_ms, xf_exec_result *out) {
         out->status = XF_EXEC_ERROR;
         return;
     }
+    if (pid > 0) {
+        /* Parent side of the setpgid race: ensure the child's group id equals
+         * its pid before we might need kill(-pid). Harmless if the child won
+         * the race and already did it. */
+        setpgid(pid, pid);
+    }
     if (pid == 0) {
         /* Child: default-handle fatal signals so the parent sees WIFSIGNALED.
          * Detach from the controlling terminal's process group so a stray
@@ -268,11 +280,24 @@ void xf_execute(const xf_prog *p, int timeout_ms, xf_exec_result *out) {
         _exit(0);   /* not reached */
     }
 
-    /* Parent: bounded wait. */
+    /* Parent: bounded wait. WUNTRACED so a fuzzed self-SIGSTOP (which would
+     * otherwise leave the child parked in 'T' and invisible to a plain
+     * waitpid) is detected and killed at once instead of leaking. */
     int status = 0;
     for (;;) {
-        pid_t w = waitpid(pid, &status, WNOHANG);
-        if (w == pid) break;
+        pid_t w = waitpid(pid, &status, WNOHANG | WUNTRACED);
+        if (w == pid) {
+            if (WIFSTOPPED(status)) {
+                /* Child stopped itself — nuke its whole group and reap. */
+                kill(-pid, SIGKILL);
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
+                out->status = XF_EXEC_TIMEOUT;   /* treat stop as an anomaly  */
+                out->elapsed_ms = xf_now_ms() - t0;
+                return;
+            }
+            break;
+        }
         if (w < 0) {
             if (errno == EINTR) continue;
             out->status = XF_EXEC_ERROR;
@@ -280,6 +305,7 @@ void xf_execute(const xf_prog *p, int timeout_ms, xf_exec_result *out) {
         }
         uint64_t now = xf_now_ms();
         if ((int)(now - t0) >= timeout_ms) {
+            kill(-pid, SIGKILL);   /* kill the child's process group          */
             kill(pid, SIGKILL);
             waitpid(pid, &status, 0);
             out->status = XF_EXEC_TIMEOUT;

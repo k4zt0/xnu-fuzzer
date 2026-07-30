@@ -176,6 +176,8 @@ static bool is_dangerous_syscall(uint32_t n) {
         case SYS_setuid:
         case SYS_setgid:
         case SYS_settimeofday:
+        case SYS_ptrace:          /* PT_TRACE_ME/attach parks the process     */
+        case SYS___pthread_kill:  /* can self-deliver SIGSTOP                  */
             return true;
         default:
             return false;
