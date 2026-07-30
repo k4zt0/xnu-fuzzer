@@ -119,8 +119,8 @@ void xf_iokit_discover(void) {
     }
     IOObjectRelease(it);
 
-    XF_INFO("IOKit discovery: %u user-client nodes probed, %u openable targets",
-            probed, g_iokit_ntargets);
+    XF_INFO("IOKit discovery: %u user-client nodes probed, %u opens, %u targets",
+            probed, opened, g_iokit_ntargets);
     for (uint32_t i = 0; i < g_iokit_ntargets; i++) {
         XF_INFO("  target[%u] %s (type=%u)%s", i,
                 g_iokit_targets[i].client_class, g_iokit_targets[i].open_type,

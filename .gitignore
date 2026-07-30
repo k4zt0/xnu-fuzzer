@@ -18,3 +18,4 @@ state/*
 
 # macOS
 .DS_Store
+run/

@@ -36,6 +36,7 @@ typedef struct {
     const char *corpus_dir;
     const char *crash_dir;
     const char *state_dir;
+    const char *sandbox_dir;    /* throwaway cwd for executor children       */
 
     uint64_t    seed;           /* master PRNG seed                          */
     int         procs;          /* parallel executor procs                  */

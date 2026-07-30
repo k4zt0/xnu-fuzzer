@@ -169,6 +169,13 @@ static bool is_dangerous_syscall(uint32_t n) {
         case SYS_execve:
         case SYS_posix_spawn:
         case SYS___mac_syscall:   /* sandbox/MAC policy churn                */
+        case SYS_chflags:         /* can set uf_immutable on real files      */
+        case SYS_fchflags:
+        case SYS_mount:
+        case SYS_unmount:
+        case SYS_setuid:
+        case SYS_setgid:
+        case SYS_settimeofday:
             return true;
         default:
             return false;
