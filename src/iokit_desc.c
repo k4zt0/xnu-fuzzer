@@ -95,10 +95,13 @@ void xf_iokit_discover(void) {
 
         bool danger = client_is_dangerous(cls);
 
-        /* In safe mode we still record the target (for stats) but never open
-         * destructive clients here. */
+        /* The dangerous-client denylist (SEP, keystore, RootDomain power mgmt,
+         * firmware/boot-policy, …) is about *catastrophic* clients that can
+         * brick, compromise, or shut down the machine — NOT about fuzzing
+         * aggressiveness. It is enforced unconditionally, even under --unsafe,
+         * so those clients are never opened. */
         bool found_open = false;
-        if (!(g_cfg.safe_mode && danger)) {
+        if (!danger) {
             for (uint32_t t = 0; t < IOK_PROBE_TYPES; t++) {
                 io_connect_t conn = IO_OBJECT_NULL;
                 kr = IOServiceOpen(e, mach_task_self(), t, &conn);
