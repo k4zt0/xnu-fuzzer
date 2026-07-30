@@ -16,6 +16,7 @@
 #include "coverage.h"
 #include "crash.h"
 #include "persist.h"
+#include "repro.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -100,8 +101,15 @@ static uint32_t       s_hang_samples  = 0;
 static void worker_loop(uint64_t seed, int worker_id) {
     xf_rng_t rng; xf_rng_seed(&rng, seed);
 
+    /* Each worker owns a private corpus subdir to avoid filename clobbering
+     * between workers, but also seeds from any top-level .prog files. */
+    char wcorpus[1100];
+    snprintf(wcorpus, sizeof(wcorpus), "%s/w%d", g_cfg.corpus_dir, worker_id);
+    mkdir(wcorpus, 0755);
+
     xf_corpus corpus; xf_corpus_init(&corpus);
-    xf_corpus_load(&corpus, g_cfg.corpus_dir);
+    xf_corpus_load(&corpus, g_cfg.corpus_dir);   /* shared seeds              */
+    xf_corpus_load(&corpus, wcorpus);            /* own persisted corpus      */
 
     xf_stats st; memset(&st, 0, sizeof(st));
     st.start_ms = xf_now_ms();
@@ -205,12 +213,12 @@ static void worker_loop(uint64_t seed, int worker_id) {
             xf_persist_store_counter(counter);
             print_stats(&st, &corpus);
         }
-        if ((st.execs % 20000) == 0) xf_corpus_save(&corpus, g_cfg.corpus_dir);
+        if ((st.execs % 20000) == 0) xf_corpus_save(&corpus, wcorpus);
 
         if (g_cfg.max_execs && st.execs >= (uint64_t)g_cfg.max_execs) break;
     }
 
-    xf_corpus_save(&corpus, g_cfg.corpus_dir);
+    xf_corpus_save(&corpus, wcorpus);
     xf_persist_store_counter(counter);
     print_stats(&st, &corpus);
     xf_corpus_free(&corpus);
@@ -241,6 +249,9 @@ static void setup_dirs(void) {
 int main(int argc, char **argv) {
     set_defaults();
     const char *cov_name = "blind";
+    const char *repro_path = NULL;
+    const char *minimize_path = NULL;
+    int repro_iters = 10;
 
     static struct option opts[] = {
         {"workdir",  required_argument, 0, 'w'},
@@ -252,12 +263,15 @@ int main(int argc, char **argv) {
         {"unsafe",   no_argument,       0, 'u'},
         {"dry-run",  no_argument,       0, 'd'},
         {"max-execs",required_argument, 0, 'm'},
+        {"repro",    required_argument, 0, 'R'},
+        {"minimize", required_argument, 0, 'M'},
+        {"iters",    required_argument, 0, 'I'},
         {"verbose",  no_argument,       0, 'v'},
         {"help",     no_argument,       0, 'h'},
         {0,0,0,0}
     };
     int ch;
-    while ((ch = getopt_long(argc, argv, "w:s:p:t:S:c:udm:vh", opts, NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "w:s:p:t:S:c:udm:R:M:I:vh", opts, NULL)) != -1) {
         switch (ch) {
         case 'w': g_cfg.workdir = optarg; break;
         case 's': g_cfg.seed = strtoull(optarg, NULL, 0); break;
@@ -268,6 +282,9 @@ int main(int argc, char **argv) {
         case 'u': g_cfg.safe_mode = false; break;
         case 'd': g_cfg.dry_run = true; break;
         case 'm': g_cfg.max_execs = atol(optarg); break;
+        case 'R': repro_path = optarg; break;
+        case 'M': minimize_path = optarg; break;
+        case 'I': repro_iters = atoi(optarg); break;
         case 'v': g_cfg.verbose = true; break;
         case 'h': default: usage(argv[0]); return ch == 'h' ? 0 : 1;
         }
@@ -291,6 +308,10 @@ int main(int argc, char **argv) {
 
     if (xf_persist_post_reboot_check())
         XF_ERR("recovered from a prior kernel panic — reproducer saved");
+
+    /* One-shot replay / minimize modes. */
+    if (repro_path)    { int rc = xf_repro_run(repro_path, repro_iters); xf_log_flush(); return rc; }
+    if (minimize_path) { int rc = xf_minimize(minimize_path);            xf_log_flush(); return rc; }
 
     signal(SIGINT, on_sigint);
     signal(SIGTERM, on_sigint);

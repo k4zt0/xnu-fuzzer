@@ -22,6 +22,19 @@ static uint32_t             s_cap = 0;
 static uint32_t s_surf_lo[XF_SURFACE_COUNT];
 static uint32_t s_surf_hi[XF_SURFACE_COUNT];   /* [lo, hi)                   */
 
+/* Ids of "curated" (typed, resource-aware) descriptors — everything except
+ * the raw syscall-number layer. Sampling is biased toward these so programs
+ * build meaningful fd/port sequences instead of drowning in raw noise. */
+static uint32_t *s_curated = NULL;
+static uint32_t  s_ncurated = 0, s_curated_cap = 0;
+static void curated_push(uint32_t id) {
+    if (s_ncurated == s_curated_cap) {
+        s_curated_cap = s_curated_cap ? s_curated_cap * 2 : 128;
+        s_curated = realloc(s_curated, s_curated_cap * sizeof(*s_curated));
+    }
+    s_curated[s_ncurated++] = id;
+}
+
 static void reg_push(const xf_call_desc *d) {
     if (s_count == s_cap) {
         s_cap = s_cap ? s_cap * 2 : 1024;
@@ -30,11 +43,6 @@ static void reg_push(const xf_call_desc *d) {
     s_reg[s_count++] = d;
 }
 
-static void reg_range(xf_surface_t surf, const xf_call_desc *tbl, uint32_t n) {
-    s_surf_lo[surf] = s_count;
-    for (uint32_t i = 0; i < n; i++) reg_push(&tbl[i]);
-    s_surf_hi[surf] = s_count;
-}
 
 void xf_desc_init(bool want_iokit) {
     for (int i = 0; i < XF_SURFACE_COUNT; i++) s_surf_lo[i] = s_surf_hi[i] = 0;
@@ -44,8 +52,8 @@ void xf_desc_init(bool want_iokit) {
     if (g_cfg.enable_bsd) {
         s_surf_lo[XF_SURFACE_BSD] = s_count;
         const xf_call_desc *bsd = xf_bsd_table(&n);
-        for (uint32_t i = 0; i < n; i++) reg_push(&bsd[i]);
-        /* Raw layer covering every syscall number. */
+        for (uint32_t i = 0; i < n; i++) { curated_push(s_count); reg_push(&bsd[i]); }
+        /* Raw layer covering every syscall number (not curated). */
         uint32_t rn;
         xf_call_desc *raw = xf_bsd_build_raw(&rn);
         for (uint32_t i = 0; i < rn; i++) reg_push(&raw[i]);
@@ -54,13 +62,19 @@ void xf_desc_init(bool want_iokit) {
 
     if (g_cfg.enable_mach) {
         const xf_call_desc *m = xf_mach_table(&n);
-        reg_range(XF_SURFACE_MACH, m, n);
+        s_surf_lo[XF_SURFACE_MACH] = s_count;
+        for (uint32_t i = 0; i < n; i++) { curated_push(s_count); reg_push(&m[i]); }
+        s_surf_hi[XF_SURFACE_MACH] = s_count;
     }
 
     if (g_cfg.enable_iokit && want_iokit) {
         xf_iokit_discover();
         const xf_call_desc *io = xf_iokit_table(&n);
-        if (n) reg_range(XF_SURFACE_IOKIT, io, n);
+        if (n) {
+            s_surf_lo[XF_SURFACE_IOKIT] = s_count;
+            for (uint32_t i = 0; i < n; i++) { curated_push(s_count); reg_push(&io[i]); }
+            s_surf_hi[XF_SURFACE_IOKIT] = s_count;
+        }
     }
 
     XF_INFO("registry: %u descriptors (BSD %u..%u, MACH %u..%u, IOKIT %u..%u)",
@@ -83,6 +97,11 @@ uint32_t xf_desc_id_of(const xf_call_desc *d) {
 
 const xf_call_desc *xf_desc_random(xf_rng_t *r) {
     if (s_count == 0) return NULL;
+    /* ~55% of the time draw from the curated pool (typed, resource-aware) so
+     * sequences stay meaningful; otherwise draw from the full registry to keep
+     * exercising the entire raw syscall range. */
+    if (s_ncurated && xf_rng_below(r, 100) < 55)
+        return s_reg[s_curated[xf_rng_below(r, s_ncurated)]];
     return s_reg[xf_rng_below(r, s_count)];
 }
 

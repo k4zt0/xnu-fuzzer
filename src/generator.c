@@ -117,13 +117,15 @@ int xf_gen_append_call(xf_prog *p, xf_rng_t *r) {
     const xf_call_desc *d = xf_desc_random(r);
     if (!d) return -1;
 
-    /* Respect safety governor. */
-    if (g_cfg.safe_mode && (d->flags & XF_C_DANGEROUS)) {
-        /* pick again a few times, then bail out for this round */
-        for (int t = 0; t < 8 && (d->flags & XF_C_DANGEROUS); t++)
-            d = xf_desc_random(r);
-        if (d->flags & XF_C_DANGEROUS) return -1;
+    /* Respect safety governor, and steer away from signal-masking blockers
+     * (which only produce benign hangs) ~92% of the time. */
+    for (int t = 0; t < 10; t++) {
+        bool bad = (g_cfg.safe_mode && (d->flags & XF_C_DANGEROUS)) ||
+                   ((d->flags & XF_C_SLOW) && xf_rng_below(r, 100) < 92);
+        if (!bad) break;
+        d = xf_desc_random(r);
     }
+    if (g_cfg.safe_mode && (d->flags & XF_C_DANGEROUS)) return -1;
 
     xf_call *c = &p->calls[p->ncalls];
     memset(c, 0, sizeof(*c));

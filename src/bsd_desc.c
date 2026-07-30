@@ -184,6 +184,41 @@ static bool is_dangerous_syscall(uint32_t n) {
     }
 }
 
+/* Syscalls that block waiting for an event and (often) mask signals while
+ * doing so, defeating the per-call SIGALRM watchdog. They aren't bugs and
+ * aren't dangerous — they just waste wall-clock hitting the parent timeout and
+ * produce benign "hang" noise, so the generator issues them only rarely. */
+static bool is_blocking_syscall(uint32_t n) {
+    switch (n) {
+        case SYS_sigsuspend:
+        case SYS_sigsuspend_nocancel:
+        case SYS___semwait_signal:
+        case SYS___semwait_signal_nocancel:
+        case SYS_select:
+        case SYS_select_nocancel:
+        case SYS_pselect:
+        case SYS_pselect_nocancel:
+        case SYS_poll:
+        case SYS_poll_nocancel:
+        case SYS_kevent:
+        case SYS_kevent_qos:
+        case SYS_kevent_id:
+        case SYS_semop:
+        case SYS_msgrcv:
+        case SYS_msgrcv_nocancel:
+        case SYS_wait4:
+        case SYS_wait4_nocancel:
+        case SYS_waitid:
+        case SYS_waitid_nocancel:
+        case SYS___sigwait:
+        case SYS___sigwait_nocancel:
+        case SYS___disable_threadsignal:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* Build heap-allocated raw descriptors for numbers 0..SYS_MAXSYSCALL-1.
  * Caller owns the returned array (never freed — lives for process lifetime). */
 xf_call_desc *xf_bsd_build_raw(uint32_t *count) {
@@ -204,6 +239,7 @@ xf_call_desc *xf_bsd_build_raw(uint32_t *count) {
         }
         d->produces = XF_RES_NONE;
         d->flags    = is_dangerous_syscall(i) ? XF_C_DANGEROUS : XF_C_NONE;
+        if (is_blocking_syscall(i)) d->flags |= XF_C_SLOW;
         n++;
     }
     *count = n;
