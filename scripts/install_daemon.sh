@@ -68,11 +68,27 @@ chown root:wheel "$PLIST"
 chmod 0644 "$PLIST"
 
 echo "[*] bootstrapping"
-launchctl bootout system/"$LABEL" 2>/dev/null || true
+# Don't let a bootstrap hiccup abort the script (set -e); report instead.
+set +e
+launchctl bootout system/"$LABEL" 2>/dev/null
+sleep 1
+launchctl enable system/"$LABEL" 2>/dev/null
 launchctl bootstrap system "$PLIST"
-launchctl enable system/"$LABEL" 2>/dev/null || true
+bs=$?
+launchctl kickstart -k system/"$LABEL" 2>/dev/null
+sleep 2
+set -e
 
-echo "[+] installed. state in ${WORKDIR}"
+echo "[+] installed. state in ${WORKDIR} (bootstrap rc=$bs)"
+echo "=== launchctl state ==="
+launchctl print system/"$LABEL" 2>/dev/null | grep -E 'state =|pid =|last exit|program =|runs =' || \
+  echo "  (service not found — bootstrap failed)"
+echo "=== running processes ==="
+ps -axo pid,command | grep "$INSTALL_DIR/xfuzz" | grep -v grep || echo "  (none running yet)"
+if [[ -f "${WORKDIR}/daemon.err" ]]; then
+  echo "=== last daemon.err ==="; tail -8 "${WORKDIR}/daemon.err"
+fi
+echo
 echo "    status: sudo launchctl print system/${LABEL}"
 echo "    stop:   sudo launchctl bootout system/${LABEL}"
-echo "    logs:   tail -f ${WORKDIR}/xfuzz.log"
+echo "    logs:   sudo tail -f ${WORKDIR}/xfuzz.log"
