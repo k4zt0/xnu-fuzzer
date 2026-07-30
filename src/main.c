@@ -23,6 +23,7 @@
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <getopt.h>
@@ -197,7 +198,7 @@ static void worker_loop(uint64_t seed, int worker_id) {
             break;
         }
 
-        if (interesting && corpus.count < 8192) {
+        if (interesting && corpus.count < 2048) {
             xf_corpus_add(&corpus, &p);
             st.corpus_adds++;
         }
@@ -356,15 +357,40 @@ int main(int argc, char **argv) {
         worker_loop(g_cfg.seed, 0);
     } else {
         /* Fork independent workers; each has its own RNG stream and shares the
-         * on-disk corpus/crash dirs. */
-        for (int i = 0; i < g_cfg.procs; i++) {
-            pid_t pid = fork();
-            if (pid == 0) {
-                worker_loop(g_cfg.seed + 0x9E3779B97F4A7C15ULL * (uint64_t)(i + 1), i);
-                _exit(0);
-            }
+         * on-disk corpus/crash dirs. A worker killed by jetsam/OOM is respawned
+         * so the campaign keeps running indefinitely. */
+        int nprocs = g_cfg.procs;
+        pid_t *pids = calloc(nprocs, sizeof(pid_t));
+        #define SPAWN_WORKER(slot) do {                                        \
+            pid_t _p = fork();                                                 \
+            if (_p == 0) {                                                     \
+                worker_loop(g_cfg.seed + 0x9E3779B97F4A7C15ULL *               \
+                            (uint64_t)((slot) + 1) + (uint64_t)restarts, slot);\
+                _exit(0);                                                      \
+            }                                                                  \
+            pids[slot] = _p;                                                   \
+        } while (0)
+        uint64_t restarts = 0;
+        for (int i = 0; i < nprocs; i++) SPAWN_WORKER(i);
+
+        while (!s_stop) {
+            int status;
+            pid_t w = wait(&status);
+            if (w < 0) { if (errno == EINTR) continue; break; }
+            if (s_stop) break;
+            int slot = -1;
+            for (int i = 0; i < nprocs; i++) if (pids[i] == w) slot = i;
+            if (slot < 0) continue;
+            restarts++;
+            XF_WARN("worker %d (pid %d) died — respawning (restart #%llu)",
+                    slot, w, (unsigned long long)restarts);
+            SPAWN_WORKER(slot);
         }
-        for (int i = 0; i < g_cfg.procs; i++) wait(NULL);
+
+        /* Shutting down: ask workers to stop, then reap. */
+        for (int i = 0; i < nprocs; i++) if (pids[i] > 0) kill(pids[i], SIGTERM);
+        for (int i = 0; i < nprocs; i++) if (pids[i] > 0) waitpid(pids[i], NULL, 0);
+        free(pids);
     }
 
     xf_log_flush();

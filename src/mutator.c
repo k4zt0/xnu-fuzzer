@@ -34,7 +34,7 @@ static void mutate_blob(xf_arg *arg, xf_rng_t *r) {
     case 3: { /* grow */
         uint32_t add = 1 + (uint32_t)xf_rng_below(r, 64);
         uint32_t nl = arg->blob_len + add;
-        if (nl <= 8192) {
+        if (nl <= 1024) {   /* bound blob growth to keep corpus memory sane   */
             arg->blob = realloc(arg->blob, nl);
             for (uint32_t i = arg->blob_len; i < nl; i++)
                 arg->blob[i] = (uint8_t)xf_rng_next(r);

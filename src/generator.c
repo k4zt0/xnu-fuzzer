@@ -7,7 +7,7 @@
 /* Allocate a random inline blob of length in [min,max]. */
 static void make_blob(xf_arg *arg, uint32_t min, uint32_t max, xf_rng_t *r) {
     if (max == 0) { arg->blob = NULL; arg->blob_len = 0; return; }
-    if (max > 4096) max = 4096;
+    if (max > 2048) max = 2048;
     uint32_t len = min + (uint32_t)xf_rng_below(r, (max - min) + 1);
     arg->blob = malloc(len ? len : 1);
     arg->blob_len = len;

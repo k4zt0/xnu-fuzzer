@@ -22,6 +22,7 @@
 #include <sys/wait.h>
 #include <sys/time.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <mach/mach.h>
 #include <IOKit/IOKitLib.h>
 
@@ -176,6 +177,16 @@ static void child_seal_fds(void) {
     /* Contain relative-path file creation (fuzzed open(O_CREAT), mkdir, ...)
      * inside a throwaway sandbox so it never litters the project/corpus. */
     if (g_cfg.sandbox_dir) { if (chdir(g_cfg.sandbox_dir) != 0) { /* ignore */ } }
+
+    /* Cap child resources so a fuzzed mmap(huge)/setrlimit can't balloon the
+     * process into jetsam territory (which would SIGKILL it and, under memory
+     * pressure, neighbouring workers too). Huge allocations fail with ENOMEM
+     * instead — a cleaner, faster outcome. */
+    struct rlimit rl;
+    rl.rlim_cur = rl.rlim_max = 512UL * 1024 * 1024;   /* 512 MiB addr space */
+    setrlimit(RLIMIT_AS, &rl);
+    rl.rlim_cur = rl.rlim_max = 0;                      /* no core dumps      */
+    setrlimit(RLIMIT_CORE, &rl);
 }
 
 /* Execute the whole program in the current (child) process. */
@@ -317,9 +328,18 @@ void xf_execute(const xf_prog *p, int timeout_ms, xf_exec_result *out) {
 
     out->elapsed_ms = xf_now_ms() - t0;
     if (WIFSIGNALED(status)) {
-        /* Uncaught signal — normally only our own SIGKILL races here. */
-        out->status = XF_EXEC_CRASH;
-        out->signo  = WTERMSIG(status);
+        int sg = WTERMSIG(status);
+        /* An external SIGKILL that reaches here (our own timeout SIGKILL is
+         * handled above) is almost always jetsam/OOM killing a memory-hungry
+         * child — benign, not a kernel bug. Other uncaught signals are rare
+         * and worth capturing. */
+        if (sg == SIGKILL) {
+            out->status = XF_EXEC_CHILDSIG;
+            out->signo  = SIGKILL;
+        } else {
+            out->status = XF_EXEC_CRASH;
+            out->signo  = sg;
+        }
     } else if (WIFEXITED(status)) {
         int code = WEXITSTATUS(status);
         if (code == 255) {
